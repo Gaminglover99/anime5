@@ -1,0 +1,306 @@
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import AdminLayout from "@/components/admin/admin-layout";
+import { Button } from "@/components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Trash, CheckCircle, Mail } from "lucide-react";
+import { User } from "@shared/schema";
+import { RequestSearch } from "@/components/admin/request-search";
+
+// Define a manual AnimeRequest type that matches our API structure
+interface AnimeRequestData {
+  id: number;
+  userId: number | null;
+  animeName: string;
+  description: string | null;
+  imageUrl: string | null;
+  additionalInfo: string | null;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  user?: User;
+}
+
+const RequestsManagementPage = () => {
+  const { toast } = useToast();
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [selectedRequest, setSelectedRequest] = useState<AnimeRequestData | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Fetch anime requests
+  const { data: requestsData, isLoading } = useQuery<{data: AnimeRequestData[]}>({
+    queryKey: ["/api/anime-requests"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/anime-requests");
+      if (!res.ok) {
+        throw new Error("Failed to fetch anime requests");
+      }
+      return await res.json();
+    }
+  });
+  
+  // Filter requests based on search query
+  const requests = searchQuery
+    ? (requestsData?.data || []).filter(request => 
+        request.animeName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (request.additionalInfo && request.additionalInfo.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (request.user?.username && request.user.username.toLowerCase().includes(searchQuery.toLowerCase()))
+      )
+    : requestsData?.data || [];
+
+  // Approve request mutation (update status to "Approved")
+  const approveMutation = useMutation({
+    mutationFn: async (requestId: number) => {
+      const res = await apiRequest("PUT", `/api/anime-requests/${requestId}/status`, {
+        status: "Approved"
+      });
+      if (!res.ok) {
+        throw new Error("Failed to approve request");
+      }
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/anime-requests"] });
+      toast({
+        title: "Request approved",
+        description: "The anime request has been approved.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to approve request",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  });
+
+  // Reject request mutation (update status to "Rejected")
+  const rejectMutation = useMutation({
+    mutationFn: async (requestId: number) => {
+      const res = await apiRequest("PUT", `/api/anime-requests/${requestId}/status`, {
+        status: "Rejected"
+      });
+      if (!res.ok) {
+        throw new Error("Failed to reject request");
+      }
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/anime-requests"] });
+      setDeleteDialogOpen(false);
+      setSelectedRequest(null);
+      toast({
+        title: "Request rejected",
+        description: "The anime request has been rejected.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to reject request",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  });
+
+  // Contact user mutation
+  const contactMutation = useMutation({
+    mutationFn: async ({ email }: { email: string }) => {
+      // For now, just open the default email client
+      window.open(`mailto:${email}?subject=Regarding Your Anime Request&body=Hello,%0D%0A%0D%0AWe received your anime request and wanted to discuss it further.%0D%0A%0D%0ARegards,%0D%0AAnime Kingdom Team`);
+      return { success: true };
+    },
+    onSuccess: () => {
+      toast({
+        title: "Email client opened",
+        description: "Your default email client has been opened to contact the user.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to open email client",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  });
+
+  const handleApprove = (request: AnimeRequestData) => {
+    approveMutation.mutate(request.id);
+  };
+
+  const handleDelete = (request: AnimeRequestData) => {
+    setSelectedRequest(request);
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDelete = () => {
+    if (selectedRequest) {
+      rejectMutation.mutate(selectedRequest.id);
+    }
+  };
+
+  const handleContact = (request: AnimeRequestData) => {
+    if (request.user?.email) {
+      contactMutation.mutate({ email: request.user.email });
+    } else {
+      toast({
+        title: "No email available",
+        description: "This user does not have an email address.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const getStatusBadge = (status: string) => {
+    // Convert status to lowercase for case-insensitive comparison
+    const normalizedStatus = status.toLowerCase();
+    
+    switch (normalizedStatus) {
+      case "approved":
+        return <Badge className="bg-green-600">Approved</Badge>;
+      case "rejected":
+        return <Badge className="bg-red-600">Rejected</Badge>;
+      default:
+        return <Badge className="bg-yellow-600">Pending</Badge>;
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString() + " " + date.toLocaleTimeString();
+  };
+
+  if (isLoading) {
+    return (
+      <AdminLayout title="Anime Requests">
+        <div className="p-6">
+          <div className="flex justify-center items-center h-64">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+          </div>
+        </div>
+      </AdminLayout>
+    );
+  }
+
+  return (
+    <AdminLayout title="Anime Requests">
+      <div className="p-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
+          <h1 className="text-2xl font-bold">Anime Requests</h1>
+          
+          <div className="w-full md:w-64">
+            <RequestSearch 
+              onSearch={(query) => setSearchQuery(query)} 
+              placeholder="Search requests..."
+              className="w-full"
+            />
+          </div>
+        </div>
+
+        {requests && requests.length > 0 ? (
+          <div className="bg-[#222] rounded-lg overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow className="border-b border-gray-800 bg-gray-900">
+                  <TableHead className="text-white">Anime Name</TableHead>
+                  <TableHead className="text-white">Requested By</TableHead>
+                  <TableHead className="text-white">Date</TableHead>
+                  <TableHead className="text-white">Status</TableHead>
+                  <TableHead className="text-white text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {requests.map((request) => (
+                  <TableRow key={request.id} className="border-b border-gray-800">
+                    <TableCell className="font-medium">
+                      <div>
+                        <div className="font-semibold">{request.animeName}</div>
+                        {request.description && (
+                          <div className="text-sm text-gray-400 mt-1">{request.description}</div>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>{request.user?.username || "Anonymous"}</TableCell>
+                    <TableCell>{formatDate(request.createdAt)}</TableCell>
+                    <TableCell>{getStatusBadge(request.status)}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end space-x-2">
+                        {request.status.toLowerCase() === "pending" && (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="bg-green-600 hover:bg-green-700 text-white"
+                              onClick={() => handleApprove(request)}
+                            >
+                              <CheckCircle className="h-4 w-4 mr-1" />
+                              Approve
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="bg-red-600 hover:bg-red-700 text-white"
+                              onClick={() => handleDelete(request)}
+                            >
+                              <Trash className="h-4 w-4 mr-1" />
+                              Reject
+                            </Button>
+                          </>
+                        )}
+                        {request.user?.email && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="bg-blue-600 hover:bg-blue-700 text-white"
+                            onClick={() => handleContact(request)}
+                          >
+                            <Mail className="h-4 w-4 mr-1" />
+                            Contact
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        ) : (
+          <div className="bg-[#222] rounded-lg p-8 text-center">
+            <p className="text-gray-400">No anime requests found.</p>
+          </div>
+        )}
+
+        <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+          <AlertDialogContent className="bg-[#222] border border-gray-800">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Reject Anime Request</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to reject this request? This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel className="bg-gray-800 text-white hover:bg-gray-700 border-gray-700">
+                Cancel
+              </AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-red-600 text-white hover:bg-red-700"
+                onClick={confirmDelete}
+              >
+                Reject
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
+    </AdminLayout>
+  );
+};
+
+export default RequestsManagementPage;
